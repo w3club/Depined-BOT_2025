@@ -1,4 +1,5 @@
 
+
 import asyncio
 import json
 import os
@@ -19,7 +20,10 @@ from colorama import Fore, Style
 from fake_useragent import FakeUserAgent
 
 
+
+# 时区设置
 TIMEZONE = pytz.timezone('Asia/Jakarta')
+
 
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
@@ -29,15 +33,17 @@ HEADERS = {
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-site",
-    "User-Agent": "Your User Agent Here" 
+    "User-Agent": "Your User Agent Here"  # 运行时动态生成
 }
 
-
+# 代理列表 URL 和文件路径
 PROXY_LIST_URL = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
 PROXY_FILE_AUTO = 'proxy.txt'
 PROXY_FILE_MANUAL = 'manual_proxy.txt'
 
+# 扩展 ID
 EXTENSION_ID = "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc"
+
 
 CONSTANTS = {
     "API": {
@@ -157,7 +163,6 @@ class ProxyManager:
         return self.check_proxy_scheme(proxy)
 
 
-
 class AccountManager:
     def __init__(self, logger: Logger, proxy_manager: ProxyManager):
         self.logger = logger
@@ -174,7 +179,7 @@ class AccountManager:
     def hide_account(self, account: str) -> str:
         return account[:6] + '*' * 6 + account[-6:]
 
-    async def generate_token(self, account: str, proxy: str = None, retries: int = 5) -> str:
+    async def generate_token(self, account: str, connector: ProxyConnector = None, retries: int = 5) -> str:
         url = "https://apitn.openledger.xyz/api/v1/auth/generate_token"
         data = json.dumps({"address": account})
         headers = {
@@ -183,7 +188,6 @@ class AccountManager:
             "Content-Type": "application/json"
         }
         for attempt in range(retries):
-            connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
                     async with session.post(url=url, headers=headers, data=data) as response:
@@ -197,8 +201,8 @@ class AccountManager:
                     self.logger.log(f"生成令牌失败: {e}", "ERROR")
                     return None
 
-    async def renew_token(self, account: str, proxy: str = None) -> str:
-        token = await self.generate_token(account, proxy)
+    async def renew_token(self, account: str, connector: ProxyConnector = None) -> str:
+        token = await self.generate_token(account, connector)
         if not token:
             self.logger.log(
                 f"[ 账户 {self.hide_account(account)} ] 续订访问令牌失败",
@@ -212,8 +216,7 @@ class AccountManager:
         )
         return token
 
-  
-
+ 
 
 class WebSocketClient:
     def __init__(self, logger: Logger):
@@ -254,6 +257,7 @@ class WebSocketClient:
                         f"[ 账户 {account} ] 任务已分配: {message}",
                         "SUCCESS"
                     )
+
 
 
 class BotFramework:
@@ -340,7 +344,9 @@ class BotFramework:
         api_base_url = CONSTANTS["API"]["BASE_URL"]
         endpoints = CONSTANTS["API"]["ENDPOINTS"]
 
-        async with ClientSession() as session:
+        connector = ProxyConnector.from_url(proxy) if proxy else None
+
+        async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
             try:
                 # 获取用户详情
                 async with session.get(
@@ -348,9 +354,7 @@ class BotFramework:
                     headers={
                         "Authorization": f"Bearer {jwt}",
                         "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                    },
-                    connector=ProxyConnector.from_url(proxy) if proxy else None,
-                    timeout=ClientTimeout(total=60)
+                    }
                 ) as response:
                     response.raise_for_status()
                     user_details = await response.json()
@@ -372,21 +376,17 @@ class BotFramework:
                                 "Authorization": f"Bearer {jwt}",
                                 "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
                             },
-                            json={"connected": True},
-                            connector=ProxyConnector.from_url(proxy) if proxy else None,
-                            timeout=ClientTimeout(total=60)
+                            json={"connected": True}
                         ) as post_response:
                             post_response.raise_for_status()
 
-                        # 获取 epoch 收益
+                       
                         async with session.get(
                             url=api_base_url + endpoints["EPOCH_EARNINGS"],
                             headers={
                                 "Authorization": f"Bearer {jwt}",
                                 "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                            },
-                            connector=ProxyConnector.from_url(proxy) if proxy else None,
-                            timeout=ClientTimeout(total=60)
+                            }
                         ) as earnings_response:
                             earnings_response.raise_for_status()
                             earnings = await earnings_response.json()
@@ -438,88 +438,88 @@ class BotFramework:
         memory = round(random.uniform(0, 32), 2)
         storage = str(round(random.uniform(0, 500), 2))
 
-        while True:
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            session = ClientSession(connector=connector, timeout=ClientTimeout(total=60))
+        connector = ProxyConnector.from_url(proxy) if proxy else None
 
-            try:
-                async with session.ws_connect(wss_url, headers=headers) as wss:
-                    self.logger.log(
-                        f"[ 账户 {self.account_manager.hide_account(account)} ] Websocket 已连接",
-                        "SUCCESS"
-                    )
+        async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
+            while True:
+                try:
+                    async with session.ws_connect(wss_url, headers=headers) as wss:
+                        self.logger.log(
+                            f"[ 账户 {self.account_manager.hide_account(account)} ] Websocket 已连接",
+                            "SUCCESS"
+                        )
 
-                    if not registered:
-                        register_message = {
-                            "workerID": identity,
-                            "msgType": "REGISTER",
-                            "workerType": "LWEXT",
-                            "message": {
-                                "id": id,
-                                "type": "REGISTER",
-                                "worker": {
-                                    "host": EXTENSION_ID,
-                                    "identity": identity,
-                                    "ownerAddress": account,
-                                    "type": "LWEXT"
+                        if not registered:
+                            register_message = {
+                                "workerID": identity,
+                                "msgType": "REGISTER",
+                                "workerType": "LWEXT",
+                                "message": {
+                                    "id": id,
+                                    "type": "REGISTER",
+                                    "worker": {
+                                        "host": EXTENSION_ID,
+                                        "identity": identity,
+                                        "ownerAddress": account,
+                                        "type": "LWEXT"
+                                    }
                                 }
                             }
-                        }
-                        await self.websocket_client.send_json_message(wss, register_message)
-                        registered = True
+                            await self.websocket_client.send_json_message(wss, register_message)
+                            registered = True
 
-                    async def send_heartbeat():
-                        while not wss.closed:
-                            await asyncio.sleep(30)
-                            heartbeat_message = {
-                                "message": {
-                                    "Worker": {
-                                        "Identity": identity,
-                                        "ownerAddress": account,
-                                        "type": "LWEXT",
-                                        "Host": EXTENSION_ID
+                        async def send_heartbeat():
+                            while not wss.closed:
+                                await asyncio.sleep(30)
+                                heartbeat_message = {
+                                    "message": {
+                                        "Worker": {
+                                            "Identity": identity,
+                                            "ownerAddress": account,
+                                            "type": "LWEXT",
+                                            "Host": EXTENSION_ID
+                                        },
+                                        "Capacity": {
+                                            "AvailableMemory": memory,
+                                            "AvailableStorage": storage,
+                                            "AvailableGPU": "",
+                                            "AvailableModels": []
+                                        }
                                     },
-                                    "Capacity": {
-                                        "AvailableMemory": memory,
-                                        "AvailableStorage": storage,
-                                        "AvailableGPU": "",
-                                        "AvailableModels": []
-                                    }
-                                },
-                                "msgType": "HEARTBEAT",
-                                "workerType": "LWEXT",
-                                "workerID": identity
-                            }
-                            await self.websocket_client.send_json_message(wss, heartbeat_message)
-                            self.logger.log(
-                                f"[ 账户 {self.account_manager.hide_account(account)} ] 发送心跳",
-                                "SUCCESS"
-                            )
+                                    "msgType": "HEARTBEAT",
+                                    "workerType": "LWEXT",
+                                    "workerID": identity
+                                }
+                                await self.websocket_client.send_json_message(wss, heartbeat_message)
+                                self.logger.log(
+                                    f"[ 账户 {self.account_manager.hide_account(account)} ] 发送心跳",
+                                    "SUCCESS"
+                                )
 
-                    heartbeat_task = asyncio.create_task(send_heartbeat())
+                        heartbeat_task = asyncio.create_task(send_heartbeat())
 
-                    try:
-                        await self.websocket_client.handle_messages(wss, account, identity)
-                    except Exception as e:
-                        self.logger.log(f"Websocket 通信错误: {e}", "ERROR")
-                    finally:
-                        if not wss.closed:
-                            await wss.close()
-                        heartbeat_task.cancel()
                         try:
-                            await heartbeat_task
-                        except asyncio.CancelledError:
-                            pass
+                            await self.websocket_client.handle_messages(wss, account, identity)
+                        except Exception as e:
+                            self.logger.log(f"Websocket 通信错误: {e}", "ERROR")
+                        finally:
+                            if not wss.closed:
+                                await wss.close()
+                            heartbeat_task.cancel()
+                            try:
+                                await heartbeat_task
+                            except asyncio.CancelledError:
+                                pass
 
-            except Exception as e:
-                self.logger.log(f"Websocket 未连接: {e}", "ERROR")
-                if use_proxy:
-                    proxy = self.proxy_manager.get_next_proxy()
-                await asyncio.sleep(5)
-            finally:
-                await session.close()
+                except Exception as e:
+                    self.logger.log(f"Websocket 未连接: {e}", "ERROR")
+                    if use_proxy:
+                        proxy = self.proxy_manager.get_next_proxy()
+                        connector = ProxyConnector.from_url(proxy) if proxy else None
+                        session.connector = connector
+                    await asyncio.sleep(5)
 
-  
+   
 
     async def main(self):
         try:
@@ -556,13 +556,15 @@ class BotFramework:
         except Exception as e:
             self.logger.log(f"错误: {e}", "ERROR")
 
- 
+  
 
     async def run_jwt_flow(self, jwt: str, proxy: str, use_proxy: bool):
         api_base_url = CONSTANTS["API"]["BASE_URL"]
         endpoints = CONSTANTS["API"]["ENDPOINTS"]
 
-        async with ClientSession() as session:
+        connector = ProxyConnector.from_url(proxy) if proxy else None
+
+        async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
             try:
                 # 获取用户详情
                 async with session.get(
@@ -570,9 +572,7 @@ class BotFramework:
                     headers={
                         "Authorization": f"Bearer {jwt}",
                         "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                    },
-                    connector=ProxyConnector.from_url(proxy) if proxy else None,
-                    timeout=ClientTimeout(total=60)
+                    }
                 ) as response:
                     response.raise_for_status()
                     user_details = await response.json()
@@ -594,9 +594,7 @@ class BotFramework:
                                 "Authorization": f"Bearer {jwt}",
                                 "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
                             },
-                            json={"connected": True},
-                            connector=ProxyConnector.from_url(proxy) if proxy else None,
-                            timeout=ClientTimeout(total=60)
+                            json={"connected": True}
                         ) as post_response:
                             post_response.raise_for_status()
 
@@ -606,9 +604,7 @@ class BotFramework:
                             headers={
                                 "Authorization": f"Bearer {jwt}",
                                 "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                            },
-                            connector=ProxyConnector.from_url(proxy) if proxy else None,
-                            timeout=ClientTimeout(total=60)
+                            }
                         ) as earnings_response:
                             earnings_response.raise_for_status()
                             earnings = await earnings_response.json()
