@@ -1,4 +1,3 @@
-
 import asyncio
 import aiohttp
 from fake_useragent import UserAgent
@@ -12,7 +11,6 @@ import sys
 import pyfiglet
 from tabulate import tabulate
 from halo import Halo
-from datetime import datetime
 import pytz
 
 # 初始化 colorama
@@ -23,26 +21,37 @@ init(autoreset=True)
 # =========================
 
 class Logger:
-    def __init__(self):
+    def __init__(self, timezone="Asia/Shanghai"):
         self.logger = logging.getLogger("DepinedBot")
         self.logger.setLevel(logging.DEBUG)
         handler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter('%(message)s')
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
+        self.timezone = timezone  # 定义时区
+
+        # 定义日志级别到中文的映射
+        self.level_map = {
+            'info': '信息',
+            'warn': '警告',
+            'error': '错误',
+            'success': '成功',
+            'debug': '调试'
+        }
 
     def log(self, level, message, value=''):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        level = level.lower()
+        now = get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone=self.timezone)
+        level_lower = level.lower()
+        level_cn = self.level_map.get(level_lower, '信息')
         colors = {
-            'info': Fore.CYAN + Style.BRIGHT,
-            'warn': Fore.YELLOW + Style.BRIGHT,
-            'error': Fore.RED + Style.BRIGHT,
-            'success': Fore.GREEN + Style.BRIGHT,
-            'debug': Fore.MAGENTA + Style.BRIGHT
+            '信息': Fore.CYAN + Style.BRIGHT,
+            '警告': Fore.YELLOW + Style.BRIGHT,
+            '错误': Fore.RED + Style.BRIGHT,
+            '成功': Fore.GREEN + Style.BRIGHT,
+            '调试': Fore.MAGENTA + Style.BRIGHT
         }
-        color = colors.get(level, Fore.WHITE)
-        level_tag = f"[ {level.upper()} ]"
+        color = colors.get(level_cn, Fore.WHITE)
+        level_tag = f"[ {level_cn} ]"
         timestamp = f"[ {now} ]"
         formatted_message = f"{Fore.CYAN + Style.BRIGHT}[ DepinedBot ]{Style.RESET_ALL} {Fore.LIGHTBLACK_EX}{timestamp}{Style.RESET_ALL} {color}{level_tag}{Style.RESET_ALL} {message}"
         
@@ -50,20 +59,20 @@ class Logger:
             if isinstance(value, dict) or isinstance(value, list):
                 try:
                     serialized = json.dumps(value, ensure_ascii=False)
-                    formatted_value = f" {Fore.GREEN}{serialized}{Style.RESET_ALL}" if level != 'error' else f" {Fore.RED}{serialized}{Style.RESET_ALL}"
+                    formatted_value = f" {Fore.GREEN}{serialized}{Style.RESET_ALL}" if level_cn != '错误' else f" {Fore.RED}{serialized}{Style.RESET_ALL}"
                 except Exception as e:
                     self.error("序列化日志值时出错:", str(e))
                     formatted_value = f" {Fore.RED}无法序列化的值{Style.RESET_ALL}"
             else:
-                if level == 'error':
+                if level_cn == '错误':
                     formatted_value = f" {Fore.RED}{value}{Style.RESET_ALL}"
-                elif level == 'warn':
+                elif level_cn == '警告':
                     formatted_value = f" {Fore.YELLOW}{value}{Style.RESET_ALL}"
                 else:
                     formatted_value = f" {Fore.GREEN}{value}{Style.RESET_ALL}"
             formatted_message += formatted_value
 
-        self.logger.log(getattr(logging, level.upper(), logging.INFO), formatted_message)
+        self.logger.log(getattr(logging, level_upper(level_cn), logging.INFO), formatted_message)
 
     def info(self, message, value=''):
         self.log('info', message, value)
@@ -80,11 +89,28 @@ class Logger:
     def debug(self, message, value=''):
         self.log('debug', message, value)
 
+def level_upper(level_cn):
+    """辅助函数，将中文级别转换为 logging 模块的级别名"""
+    mapping = {
+        '信息': 'INFO',
+        '警告': 'WARNING',
+        '错误': 'ERROR',
+        '成功': 'INFO',  # 成功映射为 INFO
+        '调试': 'DEBUG'
+    }
+    return mapping.get(level_cn, 'INFO')
+
 logger = Logger()
 
 # =========================
 # 辅助函数模块
 # =========================
+
+def get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone="Asia/Shanghai"):
+    """获取当前时间的字符串表示"""
+    tz = pytz.timezone(timezone)
+    now = datetime.now(tz)
+    return now.strftime(format)
 
 async def delay(seconds):
     """延迟执行"""
@@ -119,33 +145,13 @@ def new_agent(proxy=None):
     """根据代理类型创建代理字典"""
     if proxy:
         if proxy.startswith('http://') or proxy.startswith('https://'):
-            return {
-                'http': proxy,
-                'https': proxy
-            }
+            return proxy
         elif proxy.startswith('socks4://') or proxy.startswith('socks5://'):
-            return {
-                'http': proxy,
-                'https': proxy
-            }
+            return proxy
         else:
             logger.warn(f"不支持的代理类型: {proxy}")
             return None
     return None
-
-def get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone="Asia/Shanghai"):
-    """获取当前时间的字符串表示
-
-    Args:
-        format (str): 时间格式，默认格式为 "%Y-%m-%d %H:%M:%S"。
-        timezone (str): 时区名称，默认时区为 "Asia/Shanghai"（北京时间）。
-
-    Returns:
-        str: 格式化后的时间字符串。
-    """
-    tz = pytz.timezone(timezone)  # 设置时区
-    now = datetime.now(tz)       # 获取当前时间（指定时区）
-    return now.strftime(format)  # 格式化时间
 
 # =========================
 # API 模块
@@ -249,8 +255,8 @@ async def get_user_info(session, token, proxy=None):
     """获取用户信息"""
     url = 'https://api.depined.org/api/user/details'
     try:
-        proxies = new_agent(proxy)
-        async with session.get(url, headers=make_headers(token), proxy=proxies.get('http') if proxies else None) as response:
+        proxy_url = new_agent(proxy)
+        async with session.get(url, headers=make_headers(token), proxy=proxy_url) as response:
             if response.status == 200:
                 data = await response.json()
                 logger.info('获取用户信息成功')
@@ -267,11 +273,12 @@ async def get_earnings(session, token, proxy=None):
     """获取收益信息"""
     url = 'https://api.depined.org/api/stats/epoch-earnings'
     try:
-        proxies = new_agent(proxy)
-        async with session.get(url, headers=make_headers(token), proxy=proxies.get('http') if proxies else None) as response:
+        proxy_url = new_agent(proxy)
+        async with session.get(url, headers=make_headers(token), proxy=proxy_url) as response:
             if response.status == 200:
                 data = await response.json()
                 logger.info('获取收益信息成功')
+                logger.debug(f"收益信息数据: {data}")  # 添加调试日志
                 return data
             else:
                 error_data = await response.json()
@@ -288,8 +295,8 @@ async def connect(session, token, proxy=None):
         'connected': True
     }
     try:
-        proxies = new_agent(proxy)
-        async with session.post(url, json=payload, headers=make_headers(token), proxy=proxies.get('http') if proxies else None) as response:
+        proxy_url = new_agent(proxy)
+        async with session.post(url, json=payload, headers=make_headers(token), proxy=proxy_url) as response:
             if response.status == 200:
                 data = await response.json()
                 logger.success('连接用户成功:', data.get('message', ''))
@@ -303,148 +310,158 @@ async def connect(session, token, proxy=None):
         return None
 
 # =========================
-# 主程序逻辑
+# 主程序类
 # =========================
 
-def display_banner():
-    """显示 ASCII 艺术横幅"""
-    banner = pyfiglet.figlet_format("DepinedBot")
-    print(Fore.GREEN + banner)
+class DepinedBot:
+    def __init__(self):
+        self.accounts = []
+        self.loop = asyncio.get_event_loop()
 
-def create_stats_table(accounts):
-    """创建账户状态表格"""
-    table = []
-    headers = ['账户', '用户名', '邮箱', '状态', '今日积分', '纪元', '最后更新时间']
-    for account in accounts:
-        table.append([
-            account['token'][:8] + '...',
-            account.get('username', '未设置'),
-            account.get('email', '未绑定'),
-            account.get('status', '未知'),
-            f"{account.get('pointsToday', 0.0):.2f}",
-            f"{account.get('totalPoints', 0.0):.2f}",
-            account.get('lastUpdate', '-')
-        ])
-    return tabulate(table, headers, tablefmt='fancy_grid', stralign='center')
+    def display_banner(self):
+        """显示 ASCII 艺术横幅"""
+        banner = pyfiglet.figlet_format("DepinedBot")
+        print(Fore.GREEN + banner)
 
-def log_success(account_id, message, points_today, total_points, username, email):
-    """记录成功的活动日志"""
-    # 如果需要自定义时间格式或时区，可以通过参数传递
-    current_time = get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone="Asia/Shanghai")
+    def create_stats_table(self):
+        """创建账户状态表格"""
+        table = []
+        headers = ['账户', '用户名', '邮箱', '状态', '今日积分', '总积分', '最后更新时间']
+        for account in self.accounts:
+            table.append([
+                account['token'][:8] + '...',
+                account.get('username', '未设置'),
+                account.get('email', '未绑定'),
+                account.get('status', '未知'),
+                f"{account.get('pointsToday', 0.0):.2f}",
+                f"{account.get('totalPoints', 0.0):.2f}",
+                account.get('lastUpdate', '-')
+            ])
+        return tabulate(table, headers, tablefmt='fancy_grid', stralign='center')
 
-    log_message = (
-        f"{Fore.GREEN}[{current_time}] 账户 {account_id}: {message}"
-        f"{Fore.BLUE} | 用户名: {username or '未知'}"
-        f"{Fore.YELLOW} | 邮箱: {email or '未绑定'}"
-        f"{Fore.MAGENTA} | 今日积分: {points_today:.2f}"
-        f"{Fore.CYAN} | 纪元: {total_points:.2f}{Style.RESET_ALL}"
-    )
-    print(log_message)
+    def log_success(self, account_id, message, points_today, total_points, username, email):
+        """记录成功的活动日志"""
+        current_time = get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone="Asia/Shanghai")
 
+        log_message = (
+            f"{Fore.GREEN}[{current_time}] 账户 {account_id}: {message}"
+            f"{Fore.BLUE} | 用户名: {username or '未知'}"
+            f"{Fore.YELLOW} | 邮箱: {email or '未绑定'}"
+            f"{Fore.MAGENTA} | 今日积分: {points_today:.2f}"
+            f"{Fore.CYAN} | 总积分: {total_points:.2f}{Style.RESET_ALL}"
+        )
+        print(log_message)
 
-
-async def process_account(session, account, index):
-    """处理单个账户，包括获取用户信息和设置定时任务"""
-    try:
-        # 获取用户信息
-        user_data = await get_user_info(session, account['token'], account['proxyConfig'])
-        if user_data and 'data' in user_data:
-            email = user_data['data'].get('email', '')
-            verified = user_data['data'].get('verified', False)
-            current_tier = user_data['data'].get('current_tier', '')
-            points_balance = user_data['data'].get('points_balance', 0)
-            account['username'] = user_data['data'].get('username', '-')
-            account['email'] = email
-            logger.info(f"账户 {index + 1} 信息:", {
-                'email': email,
-                'verified': verified,
-                'current_tier': current_tier,
-                'points_balance': points_balance
-            })
-        
-        # Ping server
-        await connect(session, account['token'], account['proxyConfig'])
-        account['status'] = Fore.GREEN + 'Connected' + Style.RESET_ALL
-        
-        # 获取收益信息
-        earnings_res = await get_earnings(session, account['token'], account['proxyConfig'])
-        if earnings_res and 'data' in earnings_res:
-            account['pointsToday'] = earnings_res['data'].get('earnings', 0)
-            account['totalPoints'] = earnings_res['data'].get('epoch', 0)
-            account['lastUpdate'] = get_timestamp()
-            log_success(
-                index + 1,
-                f"Ping successful ({account['proxyConfig']['type']})" if account['proxyConfig'] else "Ping successful (Direct)",
-                account['pointsToday'],
-                account['totalPoints'],
-                account['username'],
-                account['email']
-            )
-        else:
-            logger.warn(f"账户 {index + 1} 收益信息获取失败。")
-    
-    except Exception as e:
-        account['status'] = Fore.RED + 'Error' + Style.RESET_ALL
-        account['lastUpdate'] = get_timestamp()
-        logger.error(f"账户 {index + 1} 出现错误:", str(e))
-
-async def main():
-    """主函数"""
-    display_banner()  # 显示横幅
-
-    spinner = Halo(text='读取输入文件...', spinner='dots')
-    spinner.start()
-    tokens, proxies = await read_input_files()
-    spinner.succeed(f"加载了 {len(tokens)} 个令牌和 {len(proxies)} 个代理")
-
-    accounts = [
-        {
-            'token': token,
-            'proxyConfig': proxies[index % len(proxies)] if proxies else None,
-            'status': 'Initializing',
-            'username': None,
-            'email': None,
-            'pointsToday': 0,
-            'totalPoints': 0,
-            'lastUpdate': None
-        }
-        for index, token in enumerate(tokens)
-    ]
-
-    while True:
-        # 清屏并显示横幅
-        os.system('cls' if os.name == 'nt' else 'clear')
-        display_banner()
-        print(Fore.YELLOW + '加入我们 : https://t.me/ksqxszq\n')
-        print(Fore.CYAN + '=== Depined 多账户管理 ===\n')
-        print(create_stats_table(accounts))
-        print(Fore.CYAN + '\n=== 活动日志 ===')
-
-        async with aiohttp.ClientSession() as session:
-            tasks = [process_account(session, account, index) for index, account in enumerate(accounts)]
-            await asyncio.gather(*tasks)
-        
-        # 等待30秒后刷新
-        await delay(30)
-
-# =========================
-# 进程信号处理
-# =========================
-
-def shutdown():
-    """优雅地关闭程序"""
-    logger.warn("接收到终止信号，正在清理并退出程序...")
-    sys.exit(0)
-
-def setup_signal_handlers():
-    """设置信号处理器"""
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    async def process_account(self, session, account, index):
+        """处理单个账户，包括获取用户信息和设置定时任务"""
         try:
-            loop.add_signal_handler(sig, shutdown)
-        except NotImplementedError:
-            # 例如在 Windows 上，某些信号可能不被支持
-            signal.signal(sig, lambda s, f: shutdown())
+            # 获取用户信息
+            user_data = await get_user_info(session, account['token'], account['proxyConfig'])
+            if user_data and 'data' in user_data:
+                email = user_data['data'].get('email', '')
+                verified = user_data['data'].get('verified', False)
+                current_tier = user_data['data'].get('current_tier', '')
+                points_balance = user_data['data'].get('points_balance', 0)
+                account['username'] = user_data['data'].get('username', '-')
+                account['email'] = email
+                logger.info(f"账户 {index + 1} 信息:", {
+                    'email': email,
+                    'verified': verified,
+                    'current_tier': current_tier,
+                    'points_balance': points_balance
+                })
+            
+            # Ping server
+            await connect(session, account['token'], account['proxyConfig'])
+            account['status'] = Fore.GREEN + '已连接' + Style.RESET_ALL
+            
+            # 获取收益信息
+            earnings_res = await get_earnings(session, account['token'], account['proxyConfig'])
+            if earnings_res and 'data' in earnings_res:
+                account['pointsToday'] = earnings_res['data'].get('earnings', 0)
+                # 使用 user_data 中的 points_balance 作为总积分
+                account['totalPoints'] = user_data['data'].get('points_balance', 0)
+                account['lastUpdate'] = get_timestamp(timezone="Asia/Shanghai")
+                self.log_success(
+                    index + 1,
+                    f"Ping 成功 ({account['proxyConfig']['type']})" if account['proxyConfig'] else "Ping 成功 (直接连接)",
+                    account['pointsToday'],
+                    account['totalPoints'],
+                    account['username'],
+                    account['email']
+                )
+            else:
+                logger.warn(f"账户 {index + 1} 收益信息获取失败。")
+        
+        except Exception as e:
+            account['status'] = Fore.RED + '错误' + Style.RESET_ALL
+            account['lastUpdate'] = get_timestamp(timezone="Asia/Shanghai")
+            logger.error(f"账户 {index + 1} 出现错误:", str(e))
+
+    async def main(self):
+        """主函数"""
+        self.display_banner()
+
+        spinner = Halo(text='读取输入文件...', spinner='dots')
+        spinner.start()
+        tokens, proxies = await read_input_files()
+        spinner.succeed(f"加载了 {len(tokens)} 个令牌和 {len(proxies)} 个代理")
+
+        self.accounts = [
+            {
+                'token': token,
+                'proxyConfig': proxies[index % len(proxies)] if proxies else None,
+                'status': '初始化中',
+                'username': None,
+                'email': None,
+                'pointsToday': 0,
+                'totalPoints': 0,
+                'lastUpdate': None
+            }
+            for index, token in enumerate(tokens)
+        ]
+
+        while True:
+            # 清屏并显示横幅
+            os.system('cls' if os.name == 'nt' else 'clear')
+            self.display_banner()
+            print(Fore.YELLOW + '加入我们 : https://t.me/ksqxszq\n')
+            print(Fore.CYAN + '=== Depined 多账户管理 ===\n')
+            print(self.create_stats_table())
+            print(Fore.CYAN + '\n=== 活动日志 ===')
+
+            async with aiohttp.ClientSession() as session:
+                tasks = [self.process_account(session, account, index) for index, account in enumerate(self.accounts)]
+                await asyncio.gather(*tasks)
+            
+            # 等待30秒后刷新
+            await delay(30)
+
+    def shutdown(self):
+        """优雅地关闭程序"""
+        current_time = get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone="Asia/Shanghai")
+        exit_message = (
+            f"{Fore.CYAN + Style.BRIGHT}[ {current_time} ]{Style.RESET_ALL} "
+            f"{Fore.WHITE + Style.BRIGHT}| {Style.RESET_ALL}"
+            f"{Fore.RED + Style.BRIGHT}[ EXIT ] DepinedBot 已退出{Style.RESET_ALL}"
+        )
+        print(exit_message)
+        # 取消所有挂起的任务
+        tasks = asyncio.all_tasks(loop=self.loop)
+        for task in tasks:
+            task.cancel()
+        # 等待任务取消
+        try:
+            self.loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        except Exception:
+            pass
+        self.loop.stop()
+        sys.exit(0)
+
+    def setup_signal_handlers(self):
+        """设置信号处理器"""
+        signal.signal(signal.SIGINT, lambda s, f: self.shutdown())
+        signal.signal(signal.SIGTERM, lambda s, f: self.shutdown())
 
 # =========================
 # 文件读取与验证
@@ -483,16 +500,11 @@ def parse_proxy_string(proxy_string):
             credentials, host_port = rest.split('@', 1)
             username, password = credentials.split(':', 1)
             auth = {'username': username, 'password': password}
+            proxy_url = f"{protocol}://{username}:{password}@{host_port}"
         else:
             host_port = rest
-            auth = None
-        host, port = host_port.split(':', 1)
-        return {
-            'type': protocol.lower(),
-            'host': host,
-            'port': int(port),
-            'auth': auth
-        }
+            proxy_url = f"{protocol}://{host_port}"
+        return proxy_url
     except Exception as e:
         raise ValueError(f"无效的代理格式: {proxy_string}") from e
 
@@ -501,9 +513,12 @@ def parse_proxy_string(proxy_string):
 # =========================
 
 if __name__ == "__main__":
+    bot = DepinedBot()
+    bot.setup_signal_handlers()
     try:
-        setup_signal_handlers()
-        asyncio.run(main())
+        asyncio.run(bot.main())
+    except KeyboardInterrupt:
+        bot.shutdown()
     except Exception as e:
         logger.error("程序运行时出错:", str(e))
         sys.exit(1)
