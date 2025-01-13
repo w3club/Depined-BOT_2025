@@ -1,649 +1,395 @@
-
+# depined_bot.py
 
 import asyncio
+import aiohttp
+from fake_useragent import UserAgent
+import logging
 import json
 import os
-import random
-import base64
-import uuid
+import signal
 from datetime import datetime
-import pytz
+from colorama import Fore, Style, init
+import sys
 
-from aiohttp import (
-    ClientResponseError,
-    ClientSession,
-    ClientTimeout,
-    WSMessage,
-)
-from aiohttp_socks import ProxyConnector
-from colorama import Fore, Style
-from fake_useragent import FakeUserAgent
+# 初始化 colorama
+init(autoreset=True)
 
-
-
-# 时区设置
-TIMEZONE = pytz.timezone('Asia/Jakarta')
-
-
-HEADERS = {
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Origin": "https://testnet.openledger.xyz",
-    "Referer": "https://testnet.openledger.xyz/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    "User-Agent": "Your User Agent Here"  # 运行时动态生成
-}
-
-# 代理列表 URL 和文件路径
-PROXY_LIST_URL = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
-PROXY_FILE_AUTO = 'proxy.txt'
-PROXY_FILE_MANUAL = 'manual_proxy.txt'
-
-# 扩展 ID
-EXTENSION_ID = "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc"
-
-
-CONSTANTS = {
-    "API": {
-        "BASE_URL": "https://api.depined.org/api",
-        "ENDPOINTS": {
-            "USER_DETAILS": "/user/details",
-            "WIDGET_CONNECT": "/user/widget-connect",
-            "EPOCH_EARNINGS": "/stats/epoch-earnings",
-        },
-        "HEADERS": {
-            "CONTENT_TYPE": "application/json",
-        },
-    },
-    "FILES": {
-        "JWT_PATH": "./data.txt",
-    },
-    "DELAYS": {
-        "MIN": 300,    # 最小延迟（秒）
-        "MAX": 2700,   # 最大延迟（秒）
-    },
-    "MESSAGES": {
-        "ERRORS": {
-            "FILE_READ": "读取JWT文件时出错",
-            "NO_JWT": "data.txt中未找到JWT",
-            "INITIAL_SETUP": "初始设置失败",
-            "UNCAUGHT": "未捕获的异常",
-            "UNHANDLED": "未处理的拒绝",
-        },
-        "INFO": {
-            "CONNECTED": "已连接",
-            "FOUND_ACCOUNTS": "找到",
-            "ACCOUNTS": "个JWT",
-        },
-        "LOG_FORMAT": {
-            "EARNINGS": "收益",
-            "EPOCH": "纪元",
-            "ERROR": "错误",
-        },
-    },
-}
-
-
+# =========================
+# 日志记录模块
+# =========================
 
 class Logger:
-    def log(self, message: str, level: str = "INFO"):
-        timestamp = datetime.now().astimezone(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')
-        if level == "INFO":
-            color = Fore.GREEN
-            prefix = "[信息]"
-        elif level == "ERROR":
-            color = Fore.RED
-            prefix = "[错误]"
-        elif level == "SUCCESS":
-            color = Fore.CYAN
-            prefix = "[成功]"
-        else:
-            color = Fore.WHITE
-            prefix = "[日志]"
-        
-        print(
-            f"{Fore.CYAN + Style.BRIGHT}[ {timestamp} ]{Style.RESET_ALL}"
-            f"{Fore.WHITE + Style.BRIGHT} | {Style.RESET_ALL}"
-            f"{color + Style.BRIGHT}{prefix} {message}{Style.RESET_ALL}",
-            flush=True
-        )
-
-
-
-class ProxyManager:
-    def __init__(self, logger: Logger):
-        self.logger = logger
-        self.proxies = []
-        self.proxy_index = 0
-
-    async def load_auto_proxies(self):
-        try:
-            async with ClientSession(timeout=ClientTimeout(total=20)) as session:
-                async with session.get(url=PROXY_LIST_URL) as response:
-                    response.raise_for_status()
-                    content = await response.text()
-                    with open(PROXY_FILE_AUTO, 'w') as f:
-                        f.write(content)
-                    self.proxies = content.splitlines()
-                    if not self.proxies:
-                        self.logger.log("未在下载的列表中找到代理！", "ERROR")
-                        return False
-                    self.logger.log("代理下载成功。", "INFO")
-                    self.logger.log(f"加载了 {len(self.proxies)} 个代理。", "INFO")
-                    return True
-        except Exception as e:
-            self.logger.log(f"加载代理失败: {e}", "ERROR")
-            return False
-
-    async def load_manual_proxies(self):
-        try:
-            with open(PROXY_FILE_MANUAL, "r") as f:
-                proxies = f.read().splitlines()
-            self.proxies = proxies
-            self.logger.log(f"加载了 {len(self.proxies)} 个手动代理。", "INFO")
-            return True
-        except Exception as e:
-            self.logger.log(f"加载手动代理失败: {e}", "ERROR")
-            return False
-
-    def check_proxy_scheme(self, proxy: str) -> str:
-        schemes = ["http://", "https://", "socks4://", "socks5://"]
-        if any(proxy.startswith(scheme) for scheme in schemes):
-            return proxy
-        return f"http://{proxy}"  # 默认使用http
-
-    def get_next_proxy(self) -> str:
-        if not self.proxies:
-            self.logger.log("没有可用的代理！", "ERROR")
-            return None
-        proxy = self.proxies[self.proxy_index]
-        self.proxy_index = (self.proxy_index + 1) % len(self.proxies)
-        return self.check_proxy_scheme(proxy)
-
-
-class AccountManager:
-    def __init__(self, logger: Logger, proxy_manager: ProxyManager):
-        self.logger = logger
-        self.proxy_manager = proxy_manager
-        self.headers = HEADERS.copy()
-        self.headers["User-Agent"] = FakeUserAgent().random
-
-    def generate_id(self) -> str:
-        return str(uuid.uuid4())
-
-    def generate_worker_id(self, account: str) -> str:
-        return base64.b64encode(account.encode("utf-8")).decode("utf-8")
-
-    def hide_account(self, account: str) -> str:
-        return account[:6] + '*' * 6 + account[-6:]
-
-    async def generate_token(self, account: str, connector: ProxyConnector = None, retries: int = 5) -> str:
-        url = "https://apitn.openledger.xyz/api/v1/auth/generate_token"
-        data = json.dumps({"address": account})
-        headers = {
-            **self.headers,
-            "Content-Length": str(len(data)),
-            "Content-Type": "application/json"
-        }
-        for attempt in range(retries):
-            try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.post(url=url, headers=headers, data=data) as response:
-                        response.raise_for_status()
-                        result = await response.json()
-                        return result['data']['token']
-            except (Exception, ClientResponseError) as e:
-                if attempt < retries - 1:
-                    await asyncio.sleep(2)
-                else:
-                    self.logger.log(f"生成令牌失败: {e}", "ERROR")
-                    return None
-
-    async def renew_token(self, account: str, connector: ProxyConnector = None) -> str:
-        token = await self.generate_token(account, connector)
-        if not token:
-            self.logger.log(
-                f"[ 账户 {self.hide_account(account)} ] 续订访问令牌失败",
-                "ERROR"
-            )
-            return None
-
-        self.logger.log(
-            f"[ 账户 {self.hide_account(account)} ] 访问令牌已续订",
-            "SUCCESS"
-        )
-        return token
-
- 
-
-class WebSocketClient:
-    def __init__(self, logger: Logger):
-        self.logger = logger
-
-    async def send_json_message(self, wss, message: dict):
-        try:
-            await wss.send_json(message)
-        except Exception as e:
-            self.logger.log(f"发送消息失败: {e}", "ERROR")
-
-    async def handle_messages(self, wss, account: str, identity: str):
-        async for msg in wss:
-            if isinstance(msg, WSMessage):
-                message = json.loads(msg.data)
-                if message.get("MsgType") != "JOB":
-                    response = {
-                        "type": "WEBSOCKET_RESPONSE",
-                        "data": message
-                    }
-                    await self.send_json_message(wss, response)
-                    self.logger.log(
-                        f"[ 账户 {account} ] 接收到消息: {message}",
-                        "INFO"
-                    )
-                elif message.get("MsgType") == "JOB":
-                    response = {
-                        "workerID": identity,
-                        "msgType": "JOB_ASSIGNED",
-                        "workerType": "LWEXT",
-                        "message": {
-                            "Status": True,
-                            "Ref": message["UUID"]
-                        }
-                    }
-                    await self.send_json_message(wss, response)
-                    self.logger.log(
-                        f"[ 账户 {account} ] 任务已分配: {message}",
-                        "SUCCESS"
-                    )
-
-
-
-class BotFramework:
     def __init__(self):
-        self.logger = Logger()
-        self.proxy_manager = ProxyManager(self.logger)
-        self.account_manager = AccountManager(self.logger, self.proxy_manager)
-        self.websocket_client = WebSocketClient(self.logger)
+        self.logger = logging.getLogger("DepinedBot")
+        self.logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter('%(message)s')
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
 
-    def clear_terminal(self):
-        os.system('cls' if os.name == 'nt' else 'clear')
-
-    def welcome(self):
-        print(
-            f"""
-{Fore.GREEN + Style.BRIGHT}自动 Ping {Fore.BLUE + Style.BRIGHT}Open Ledger - 机器人
-{Fore.GREEN + Style.BRIGHT}Rey? {Fore.YELLOW + Style.BRIGHT}<INI 水印>
-            """
-        )
-
-    def format_number(self, number: float) -> str:
-        if number >= 1_000_000_000:
-            return f"{number / 1_000_000_000:.2f}B"
-        elif number >= 1_000_000:
-            return f"{number / 1_000_000:.2f}M"
-        elif number >= 1_000:
-            return f"{number / 1_000:.2f}K"
-        return f"{number:.2f}"
-
-    def get_random_delay(self) -> int:
-        return random.randint(CONSTANTS["DELAYS"]["MIN"], CONSTANTS["DELAYS"]["MAX"])
-
-    async def load_proxies(self, choice: int) -> bool:
-        if choice == 1:
-            return await self.proxy_manager.load_auto_proxies()
-        elif choice == 2:
-            return await self.proxy_manager.load_manual_proxies()
-        return False
-
-    async def prompt_proxy_choice(self) -> int:
-        while True:
-            try:
-                print("1. 使用自动代理")
-                print("2. 使用手动代理")
-                print("3. 不使用代理")
-                choice = int(input("请选择 [1/2/3] -> ").strip())
-                if choice in [1, 2, 3]:
-                    proxy_type = (
-                        "自动代理" if choice == 1 else 
-                        "手动代理" if choice == 2 else 
-                        "不使用代理"
-                    )
-                    print(f"{Fore.GREEN + Style.BRIGHT}选择了 {proxy_type}。{Style.RESET_ALL}")
-                    await asyncio.sleep(1)
-                    return choice
-                else:
-                    print(f"{Fore.RED + Style.BRIGHT}请输入 1、2 或 3。{Style.RESET_ALL}")
-            except ValueError:
-                print(f"{Fore.RED + Style.BRIGHT}输入无效。请输入数字 (1, 2 或 3)。{Style.RESET_ALL}")
-
-    async def read_jwt_file(self) -> list:
-        try:
-            with open(CONSTANTS["FILES"]["JWT_PATH"], "r") as f:
-                jwts = [line.strip() for line in f if line.strip()]
-            self.logger.log(
-                f"{CONSTANTS['MESSAGES']['INFO']['FOUND_ACCOUNTS']} {len(jwts)} {CONSTANTS['MESSAGES']['INFO']['ACCOUNTS']}",
-                "INFO"
-            )
-            return jwts
-        except Exception as e:
-            self.logger.log(f"{CONSTANTS['MESSAGES']['ERRORS']['FILE_READ']}: {e}", "ERROR")
-            return []
-
-    async def process_jwt(self, jwt: str, use_proxy: bool):
-        proxy = self.proxy_manager.get_next_proxy() if use_proxy else None
-
-        if not jwt:
-            self.logger.log("JWT为空，跳过处理。", "ERROR")
-            return
-
-        await self.run_jwt_flow(jwt, proxy, use_proxy)
-
-    async def run_jwt_flow(self, jwt: str, proxy: str, use_proxy: bool):
-        api_base_url = CONSTANTS["API"]["BASE_URL"]
-        endpoints = CONSTANTS["API"]["ENDPOINTS"]
-
-        connector = ProxyConnector.from_url(proxy) if proxy else None
-
-        async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-            try:
-                # 获取用户详情
-                async with session.get(
-                    url=api_base_url + endpoints["USER_DETAILS"],
-                    headers={
-                        "Authorization": f"Bearer {jwt}",
-                        "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                    }
-                ) as response:
-                    response.raise_for_status()
-                    user_details = await response.json()
-                    username = user_details["data"]["username"]
-                    self.logger.log(
-                        f"[{username}] {CONSTANTS['MESSAGES']['INFO']['CONNECTED']}",
-                        "INFO"
-                    )
-
-                while True:
-                    try:
-                        delay = self.get_random_delay()
-                        await asyncio.sleep(delay)
-
-                        # 连接小部件
-                        async with session.post(
-                            url=api_base_url + endpoints["WIDGET_CONNECT"],
-                            headers={
-                                "Authorization": f"Bearer {jwt}",
-                                "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                            },
-                            json={"connected": True}
-                        ) as post_response:
-                            post_response.raise_for_status()
-
-                       
-                        async with session.get(
-                            url=api_base_url + endpoints["EPOCH_EARNINGS"],
-                            headers={
-                                "Authorization": f"Bearer {jwt}",
-                                "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                            }
-                        ) as earnings_response:
-                            earnings_response.raise_for_status()
-                            earnings = await earnings_response.json()
-                            formatted_earnings = self.format_number(earnings["data"]["earnings"])
-
-                        self.logger.log(
-                            f"[{username}] {CONSTANTS['MESSAGES']['INFO']['CONNECTED']} | "
-                            f"{CONSTANTS['MESSAGES']['LOG_FORMAT']['EARNINGS']}: {formatted_earnings} "
-                            f"({CONSTANTS['MESSAGES']['LOG_FORMAT']['EPOCH']}: {earnings['data']['epoch']})",
-                            "SUCCESS"
-                        )
-                    except Exception as error:
-                        self.logger.log(
-                            f"[{username}] {CONSTANTS['MESSAGES']['LOG_FORMAT']['ERROR']}: {error}",
-                            "ERROR"
-                        )
-                        await asyncio.sleep(CONSTANTS["DELAYS"]["MIN"])
-
-            except Exception as error:
-                self.logger.log(
-                    f"[JWT {jwt[:6]}...] {CONSTANTS['MESSAGES']['ERRORS']['INITIAL_SETUP']}: {error}",
-                    "ERROR"
-                )
-                await asyncio.sleep(CONSTANTS["DELAYS"]["MAX"])
-                if use_proxy:
-                    proxy = self.proxy_manager.get_next_proxy()
-                await self.run_jwt_flow(jwt, proxy, use_proxy)
-
-    async def connect_websocket(self, account: str, token: str, use_proxy: bool, proxy: str):
-        wss_url = f"wss://apitn.openledger.xyz/ws/v1/orch?authToken={token}"
-        headers = {
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Cache-Control": "no-cache",
-            "Connection": "Upgrade",
-            "Host": "apitn.openledger.xyz",
-            "Origin": EXTENSION_ID,
-            "Pragma": "no-cache",
-            "Sec-Websocket-Extensions": "permessage-deflate; client_max_window_bits",
-            "Sec-Websocket-Key": "pyAFsQgNHYvbq16if2s6Bw==",
-            "Sec-Websocket-Version": "13",
-            "Upgrade": "websocket",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    def log(self, level, message, value=''):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        level = level.lower()
+        colors = {
+            'info': Fore.CYAN + Style.BRIGHT,
+            'warn': Fore.YELLOW + Style.BRIGHT,
+            'error': Fore.RED + Style.BRIGHT,
+            'success': Fore.GREEN + Style.BRIGHT,
+            'debug': Fore.MAGENTA + Style.BRIGHT
         }
-        registered = False
-
-        id = self.account_manager.generate_id()
-        identity = self.account_manager.generate_worker_id(account)
-        memory = round(random.uniform(0, 32), 2)
-        storage = str(round(random.uniform(0, 500), 2))
-
-        connector = ProxyConnector.from_url(proxy) if proxy else None
-
-        async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-            while True:
+        color = colors.get(level, Fore.WHITE)
+        level_tag = f"[ {level.upper()} ]"
+        timestamp = f"[ {now} ]"
+        formatted_message = f"{Fore.CYAN + Style.BRIGHT}[ DepinedBot ]{Style.RESET_ALL} {Fore.LIGHTBLACK_EX}{timestamp}{Style.RESET_ALL} {color}{level_tag}{Style.RESET_ALL} {message}"
+        
+        if value:
+            if isinstance(value, dict) or isinstance(value, list):
                 try:
-                    async with session.ws_connect(wss_url, headers=headers) as wss:
-                        self.logger.log(
-                            f"[ 账户 {self.account_manager.hide_account(account)} ] Websocket 已连接",
-                            "SUCCESS"
-                        )
-
-                        if not registered:
-                            register_message = {
-                                "workerID": identity,
-                                "msgType": "REGISTER",
-                                "workerType": "LWEXT",
-                                "message": {
-                                    "id": id,
-                                    "type": "REGISTER",
-                                    "worker": {
-                                        "host": EXTENSION_ID,
-                                        "identity": identity,
-                                        "ownerAddress": account,
-                                        "type": "LWEXT"
-                                    }
-                                }
-                            }
-                            await self.websocket_client.send_json_message(wss, register_message)
-                            registered = True
-
-                        async def send_heartbeat():
-                            while not wss.closed:
-                                await asyncio.sleep(30)
-                                heartbeat_message = {
-                                    "message": {
-                                        "Worker": {
-                                            "Identity": identity,
-                                            "ownerAddress": account,
-                                            "type": "LWEXT",
-                                            "Host": EXTENSION_ID
-                                        },
-                                        "Capacity": {
-                                            "AvailableMemory": memory,
-                                            "AvailableStorage": storage,
-                                            "AvailableGPU": "",
-                                            "AvailableModels": []
-                                        }
-                                    },
-                                    "msgType": "HEARTBEAT",
-                                    "workerType": "LWEXT",
-                                    "workerID": identity
-                                }
-                                await self.websocket_client.send_json_message(wss, heartbeat_message)
-                                self.logger.log(
-                                    f"[ 账户 {self.account_manager.hide_account(account)} ] 发送心跳",
-                                    "SUCCESS"
-                                )
-
-                        heartbeat_task = asyncio.create_task(send_heartbeat())
-
-                        try:
-                            await self.websocket_client.handle_messages(wss, account, identity)
-                        except Exception as e:
-                            self.logger.log(f"Websocket 通信错误: {e}", "ERROR")
-                        finally:
-                            if not wss.closed:
-                                await wss.close()
-                            heartbeat_task.cancel()
-                            try:
-                                await heartbeat_task
-                            except asyncio.CancelledError:
-                                pass
-
+                    serialized = json.dumps(value, ensure_ascii=False)
+                    formatted_value = f" {Fore.GREEN}{serialized}{Style.RESET_ALL}" if level != 'error' else f" {Fore.RED}{serialized}{Style.RESET_ALL}"
                 except Exception as e:
-                    self.logger.log(f"Websocket 未连接: {e}", "ERROR")
-                    if use_proxy:
-                        proxy = self.proxy_manager.get_next_proxy()
-                        connector = ProxyConnector.from_url(proxy) if proxy else None
-                        session.connector = connector
-                    await asyncio.sleep(5)
+                    self.error("序列化日志值时出错:", str(e))
+                    formatted_value = f" {Fore.RED}无法序列化的值{Style.RESET_ALL}"
+            else:
+                if level == 'error':
+                    formatted_value = f" {Fore.RED}{value}{Style.RESET_ALL}"
+                elif level == 'warn':
+                    formatted_value = f" {Fore.YELLOW}{value}{Style.RESET_ALL}"
+                else:
+                    formatted_value = f" {Fore.GREEN}{value}{Style.RESET_ALL}"
+            formatted_message += formatted_value
 
-   
+        self.logger.log(getattr(logging, level.upper(), logging.INFO), formatted_message)
 
-    async def main(self):
+    def info(self, message, value=''):
+        self.log('info', message, value)
+
+    def warn(self, message, value=''):
+        self.log('warn', message, value)
+
+    def error(self, message, value=''):
+        self.log('error', message, value)
+
+    def success(self, message, value=''):
+        self.log('success', message, value)
+
+    def debug(self, message, value=''):
+        self.log('debug', message, value)
+
+logger = Logger()
+
+# =========================
+# 辅助函数模块
+# =========================
+
+async def delay(seconds):
+    """延迟执行"""
+    await asyncio.sleep(seconds)
+
+async def save_to_file(filename, data):
+    """将数据保存到文件，每条数据占一行"""
+    try:
+        with open(filename, 'a', encoding='utf-8') as f:
+            if isinstance(data, (dict, list)):
+                f.write(json.dumps(data, ensure_ascii=False) + '\n')
+            else:
+                f.write(str(data) + '\n')
+        logger.info(f"数据已保存到 {filename}")
+    except Exception as e:
+        logger.error(f"保存数据到 {filename} 时失败:", str(e))
+
+async def read_file(path_file):
+    """读取文件并返回非空行的列表"""
+    try:
+        if not os.path.exists(path_file):
+            logger.warn(f"文件 {path_file} 不存在。")
+            return []
+        with open(path_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        return [line.strip() for line in lines if line.strip()]
+    except Exception as e:
+        logger.error(f"读取文件 {path_file} 时出错:", str(e))
+        return []
+
+def new_agent(proxy=None):
+    """根据代理类型创建代理字典"""
+    if proxy:
+        if proxy.startswith('http://') or proxy.startswith('https://'):
+            return {
+                'http': proxy,
+                'https': proxy
+            }
+        elif proxy.startswith('socks4://') or proxy.startswith('socks5://'):
+            return {
+                'http': proxy,
+                'https': proxy
+            }
+        else:
+            logger.warn(f"不支持的代理类型: {proxy}")
+            return None
+    return None
+
+# =========================
+# API 模块
+# =========================
+
+ua = UserAgent()
+headers = {
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": ua.random
+}
+
+def make_headers(token=None):
+    """生成请求头"""
+    hdr = headers.copy()
+    hdr['Content-Type'] = 'application/json'
+    if token:
+        hdr['Authorization'] = f'Bearer {token}'
+    return hdr
+
+async def register_user(session, email, password):
+    """注册用户"""
+    url = 'https://api.depined.org/api/user/register'
+    payload = {
+        'email': email,
+        'password': password
+    }
+    try:
+        async with session.post(url, json=payload, headers=make_headers()) as response:
+            if response.status == 200:
+                data = await response.json()
+                logger.success('用户注册成功:', data.get('message', ''))
+                return data
+            else:
+                error_data = await response.json()
+                logger.error('注册用户时出错:', error_data)
+                return None
+    except aiohttp.ClientError as e:
+        logger.error('注册用户时出错:', str(e))
+        return None
+
+async def login_user(session, email, password):
+    """用户登录"""
+    url = 'https://api.depined.org/api/user/login'
+    payload = {
+        'email': email,
+        'password': password
+    }
+    try:
+        async with session.post(url, json=payload, headers=make_headers()) as response:
+            if response.status == 200:
+                data = await response.json()
+                logger.success('用户登录成功:', data.get('message', ''))
+                return data
+            else:
+                error_data = await response.json()
+                logger.error('用户登录时出错:', error_data)
+                return None
+    except aiohttp.ClientError as e:
+        logger.error('用户登录时出错:', str(e))
+        return None
+
+async def create_user_profile(session, token, payload):
+    """创建用户资料"""
+    url = 'https://api.depined.org/api/user/profile-creation'
+    try:
+        async with session.post(url, json=payload, headers=make_headers(token)) as response:
+            if response.status == 200:
+                data = await response.json()
+                logger.success('用户资料创建成功:', data.get('message', ''))
+                return data
+            else:
+                error_data = await response.json()
+                logger.error('创建用户资料时出错:', error_data)
+                return None
+    except aiohttp.ClientError as e:
+        logger.error('创建用户资料时出错:', str(e))
+        return None
+
+async def confirm_user_reff(session, token, referral_code):
+    """确认用户推荐码"""
+    url = 'https://api.depined.org/api/access-code/referal'
+    payload = {
+        'referral_code': referral_code
+    }
+    try:
+        async with session.post(url, json=payload, headers=make_headers(token)) as response:
+            if response.status == 200:
+                data = await response.json()
+                logger.success('确认用户推荐码成功:', data.get('message', ''))
+                return data
+            else:
+                error_data = await response.json()
+                logger.error('确认用户推荐码时出错:', error_data)
+                return None
+    except aiohttp.ClientError as e:
+        logger.error('确认用户推荐码时出错:', str(e))
+        return None
+
+async def get_user_info(session, token, proxy=None):
+    """获取用户信息"""
+    url = 'https://api.depined.org/api/user/details'
+    try:
+        proxies = new_agent(proxy)
+        async with session.get(url, headers=make_headers(token), proxy=proxies.get('http') if proxies else None) as response:
+            if response.status == 200:
+                data = await response.json()
+                logger.info('获取用户信息成功')
+                return data
+            else:
+                error_data = await response.json()
+                logger.error('获取用户信息时出错:', error_data)
+                return None
+    except aiohttp.ClientError as e:
+        logger.error('获取用户信息时出错:', str(e))
+        return None
+
+async def get_earnings(session, token, proxy=None):
+    """获取收益信息"""
+    url = 'https://api.depined.org/api/stats/epoch-earnings'
+    try:
+        proxies = new_agent(proxy)
+        async with session.get(url, headers=make_headers(token), proxy=proxies.get('http') if proxies else None) as response:
+            if response.status == 200:
+                data = await response.json()
+                logger.info('获取收益信息成功')
+                return data
+            else:
+                error_data = await response.json()
+                logger.error('获取收益信息时出错:', error_data)
+                return None
+    except aiohttp.ClientError as e:
+        logger.error('获取收益信息时出错:', str(e))
+        return None
+
+async def connect(session, token, proxy=None):
+    """连接用户"""
+    url = 'https://api.depined.org/api/user/widget-connect'
+    payload = {
+        'connected': True
+    }
+    try:
+        proxies = new_agent(proxy)
+        async with session.post(url, json=payload, headers=make_headers(token), proxy=proxies.get('http') if proxies else None) as response:
+            if response.status == 200:
+                data = await response.json()
+                logger.success('连接用户成功:', data.get('message', ''))
+                return data
+            else:
+                error_data = await response.json()
+                logger.error('连接用户时出错:', error_data)
+                return None
+    except aiohttp.ClientError as e:
+        logger.error('连接用户时出错:', str(e))
+        return None
+
+# =========================
+# 主程序逻辑
+# =========================
+
+async def process_account(session, token, proxy, index):
+    """处理单个账户，包括获取用户信息和设置定时任务"""
+    try:
+        user_data = await get_user_info(session, token, proxy)
+        if user_data and 'data' in user_data:
+            email = user_data['data'].get('email', '')
+            verified = user_data['data'].get('verified', False)
+            current_tier = user_data['data'].get('current_tier', '')
+            points_balance = user_data['data'].get('points_balance', 0)
+            logger.info(f"账户 {index + 1} 信息:", {
+                'email': email,
+                'verified': verified,
+                'current_tier': current_tier,
+                'points_balance': points_balance
+            })
+        
+        # 设置每30秒执行一次的定时任务
+        async def periodic_task():
+            while True:
+                connect_res = await connect(session, token, proxy)
+                logger.info(f"账户 {index + 1} Ping 结果:", connect_res or {'message': '未知错误'})
+                
+                earnings_res = await get_earnings(session, token, proxy)
+                if earnings_res and 'data' in earnings_res:
+                    logger.info(f"账户 {index + 1} 收益结果:", earnings_res['data'])
+                else:
+                    logger.info(f"账户 {index + 1} 收益结果:", {'message': '未知错误'})
+                
+                await asyncio.sleep(30)
+
+        asyncio.create_task(periodic_task())
+
+    except Exception as e:
+        logger.error(f"处理账户 {index + 1} 时出错:", str(e))
+
+async def main():
+    """主函数"""
+    # 显示横幅
+    banner = """
+    =========================
+    === 欢迎使用 DepinedBot ===
+    =========================
+    """
+    logger.info(banner)
+    
+    # 延迟3秒
+    await delay(3)
+    
+    # 读取 tokens 和 proxies
+    tokens = await read_file("tokens.txt")
+    if not tokens:
+        logger.error('在 tokens.txt 中未找到任何令牌。')
+        return
+    
+    proxies = await read_file("proxy.txt")
+    if not proxies:
+        logger.warn('未配置代理，程序将不使用代理。')
+    
+    logger.info(f"开始处理所有账户: {len(tokens)} 个账户")
+    
+    # 创建 aiohttp ClientSession
+    timeout = aiohttp.ClientTimeout(total=60)
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+        # 处理每个账户
+        tasks = []
+        for index, token in enumerate(tokens):
+            proxy = proxies[index % len(proxies)] if proxies else None
+            task = asyncio.create_task(process_account(session, token, proxy, index))
+            tasks.append(task)
+        
+        await asyncio.gather(*tasks)
+
+        # 保持程序运行，等待所有定时任务执行
+        await asyncio.Event().wait()
+
+# =========================
+# 进程信号处理
+# =========================
+
+def shutdown():
+    """优雅地关闭程序"""
+    logger.warn("接收到终止信号，正在清理并退出程序...")
+    sys.exit(0)
+
+def setup_signal_handlers():
+    """设置信号处理器"""
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            jwts = await self.read_jwt_file()
+            loop.add_signal_handler(sig, shutdown)
+        except NotImplementedError:
+            # 例如在 Windows 上，某些信号可能不被支持
+            signal.signal(sig, lambda s, f: shutdown())
 
-            if not jwts:
-                self.logger.log(CONSTANTS['MESSAGES']['ERRORS']['NO_JWT'], "ERROR")
-                return
-
-            proxy_choice = await self.prompt_proxy_choice()
-            use_proxy = proxy_choice in [1, 2]
-
-            self.clear_terminal()
-            self.welcome()
-            self.logger.log(
-                f"账户总数: {len(jwts)}",
-                "INFO"
-            )
-            self.logger.log(f"{'-'*75}", "INFO")
-
-            if use_proxy:
-                loaded = await self.load_proxies(proxy_choice)
-                if not loaded:
-                    self.logger.log("代理加载失败。", "ERROR")
-                    if proxy_choice in [1, 2]:
-                        use_proxy = False  # 如果代理加载失败，选择不使用代理
-
-            tasks = []
-            for jwt in jwts:
-                tasks.append(self.process_jwt(jwt, use_proxy))
-
-            await asyncio.gather(*tasks)
-
-        except Exception as e:
-            self.logger.log(f"错误: {e}", "ERROR")
-
-  
-
-    async def run_jwt_flow(self, jwt: str, proxy: str, use_proxy: bool):
-        api_base_url = CONSTANTS["API"]["BASE_URL"]
-        endpoints = CONSTANTS["API"]["ENDPOINTS"]
-
-        connector = ProxyConnector.from_url(proxy) if proxy else None
-
-        async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-            try:
-                # 获取用户详情
-                async with session.get(
-                    url=api_base_url + endpoints["USER_DETAILS"],
-                    headers={
-                        "Authorization": f"Bearer {jwt}",
-                        "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                    }
-                ) as response:
-                    response.raise_for_status()
-                    user_details = await response.json()
-                    username = user_details["data"]["username"]
-                    self.logger.log(
-                        f"[{username}] {CONSTANTS['MESSAGES']['INFO']['CONNECTED']}",
-                        "INFO"
-                    )
-
-                while True:
-                    try:
-                        delay = self.get_random_delay()
-                        await asyncio.sleep(delay)
-
-                        # 连接小部件
-                        async with session.post(
-                            url=api_base_url + endpoints["WIDGET_CONNECT"],
-                            headers={
-                                "Authorization": f"Bearer {jwt}",
-                                "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                            },
-                            json={"connected": True}
-                        ) as post_response:
-                            post_response.raise_for_status()
-
-                        # 获取 epoch 收益
-                        async with session.get(
-                            url=api_base_url + endpoints["EPOCH_EARNINGS"],
-                            headers={
-                                "Authorization": f"Bearer {jwt}",
-                                "Content-Type": CONSTANTS["API"]["HEADERS"]["CONTENT_TYPE"]
-                            }
-                        ) as earnings_response:
-                            earnings_response.raise_for_status()
-                            earnings = await earnings_response.json()
-                            formatted_earnings = self.format_number(earnings["data"]["earnings"])
-
-                        self.logger.log(
-                            f"[{username}] {CONSTANTS['MESSAGES']['INFO']['CONNECTED']} | "
-                            f"{CONSTANTS['MESSAGES']['LOG_FORMAT']['EARNINGS']}: {formatted_earnings} "
-                            f"({CONSTANTS['MESSAGES']['LOG_FORMAT']['EPOCH']}: {earnings['data']['epoch']})",
-                            "SUCCESS"
-                        )
-                    except Exception as error:
-                        self.logger.log(
-                            f"[{username}] {CONSTANTS['MESSAGES']['LOG_FORMAT']['ERROR']}: {error}",
-                            "ERROR"
-                        )
-                        await asyncio.sleep(CONSTANTS["DELAYS"]["MIN"])
-
-            except Exception as error:
-                self.logger.log(
-                    f"[JWT {jwt[:6]}...] {CONSTANTS['MESSAGES']['ERRORS']['INITIAL_SETUP']}: {error}",
-                    "ERROR"
-                )
-                await asyncio.sleep(CONSTANTS["DELAYS"]["MAX"])
-                if use_proxy:
-                    proxy = self.proxy_manager.get_next_proxy()
-                await self.run_jwt_flow(jwt, proxy, use_proxy)
-
-
+# =========================
+# 运行主程序
+# =========================
 
 if __name__ == "__main__":
     try:
-        bot = BotFramework()
-        asyncio.run(bot.main())
-    except KeyboardInterrupt:
-        print(
-            f"{Fore.CYAN + Style.BRIGHT}[ {datetime.now().astimezone(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')} ]{Style.RESET_ALL}"
-            f"{Fore.WHITE + Style.BRIGHT} | {Style.RESET_ALL}"
-            f"{Fore.RED + Style.BRIGHT}[ 退出 ] 自动 Ping Open Ledger - 机器人{Style.RESET_ALL}"
-        )
+        setup_signal_handlers()
+        asyncio.run(main())
     except Exception as e:
-        Logger().log(f"未处理的异常: {e}", "ERROR")
+        logger.error("程序运行时出错:", str(e))
