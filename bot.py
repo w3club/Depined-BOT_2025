@@ -1,4 +1,3 @@
-# depined_bot.py
 
 import asyncio
 import aiohttp
@@ -10,6 +9,11 @@ import signal
 from datetime import datetime
 from colorama import Fore, Style, init
 import sys
+import pyfiglet
+from tabulate import tabulate
+from halo import Halo
+from datetime import datetime
+import pytz
 
 # 初始化 colorama
 init(autoreset=True)
@@ -128,6 +132,20 @@ def new_agent(proxy=None):
             logger.warn(f"不支持的代理类型: {proxy}")
             return None
     return None
+
+def get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone="Asia/Shanghai"):
+    """获取当前时间的字符串表示
+
+    Args:
+        format (str): 时间格式，默认格式为 "%Y-%m-%d %H:%M:%S"。
+        timezone (str): 时区名称，默认时区为 "Asia/Shanghai"（北京时间）。
+
+    Returns:
+        str: 格式化后的时间字符串。
+    """
+    tz = pytz.timezone(timezone)  # 设置时区
+    now = datetime.now(tz)       # 获取当前时间（指定时区）
+    return now.strftime(format)  # 格式化时间
 
 # =========================
 # API 模块
@@ -288,15 +306,55 @@ async def connect(session, token, proxy=None):
 # 主程序逻辑
 # =========================
 
-async def process_account(session, token, proxy, index):
+def display_banner():
+    """显示 ASCII 艺术横幅"""
+    banner = pyfiglet.figlet_format("DepinedBot")
+    print(Fore.GREEN + banner)
+
+def create_stats_table(accounts):
+    """创建账户状态表格"""
+    table = []
+    headers = ['账户', '用户名', '邮箱', '状态', '今日积分', '纪元', '最后更新时间']
+    for account in accounts:
+        table.append([
+            account['token'][:8] + '...',
+            account.get('username', '未设置'),
+            account.get('email', '未绑定'),
+            account.get('status', '未知'),
+            f"{account.get('pointsToday', 0.0):.2f}",
+            f"{account.get('totalPoints', 0.0):.2f}",
+            account.get('lastUpdate', '-')
+        ])
+    return tabulate(table, headers, tablefmt='fancy_grid', stralign='center')
+
+def log_success(account_id, message, points_today, total_points, username, email):
+    """记录成功的活动日志"""
+    # 如果需要自定义时间格式或时区，可以通过参数传递
+    current_time = get_timestamp(format="%Y-%m-%d %H:%M:%S", timezone="Asia/Shanghai")
+
+    log_message = (
+        f"{Fore.GREEN}[{current_time}] 账户 {account_id}: {message}"
+        f"{Fore.BLUE} | 用户名: {username or '未知'}"
+        f"{Fore.YELLOW} | 邮箱: {email or '未绑定'}"
+        f"{Fore.MAGENTA} | 今日积分: {points_today:.2f}"
+        f"{Fore.CYAN} | 纪元: {total_points:.2f}{Style.RESET_ALL}"
+    )
+    print(log_message)
+
+
+
+async def process_account(session, account, index):
     """处理单个账户，包括获取用户信息和设置定时任务"""
     try:
-        user_data = await get_user_info(session, token, proxy)
+        # 获取用户信息
+        user_data = await get_user_info(session, account['token'], account['proxyConfig'])
         if user_data and 'data' in user_data:
             email = user_data['data'].get('email', '')
             verified = user_data['data'].get('verified', False)
             current_tier = user_data['data'].get('current_tier', '')
             points_balance = user_data['data'].get('points_balance', 0)
+            account['username'] = user_data['data'].get('username', '-')
+            account['email'] = email
             logger.info(f"账户 {index + 1} 信息:", {
                 'email': email,
                 'verified': verified,
@@ -304,65 +362,70 @@ async def process_account(session, token, proxy, index):
                 'points_balance': points_balance
             })
         
-        # 设置每30秒执行一次的定时任务
-        async def periodic_task():
-            while True:
-                connect_res = await connect(session, token, proxy)
-                logger.info(f"账户 {index + 1} Ping 结果:", connect_res or {'message': '未知错误'})
-                
-                earnings_res = await get_earnings(session, token, proxy)
-                if earnings_res and 'data' in earnings_res:
-                    logger.info(f"账户 {index + 1} 收益结果:", earnings_res['data'])
-                else:
-                    logger.info(f"账户 {index + 1} 收益结果:", {'message': '未知错误'})
-                
-                await asyncio.sleep(30)
-
-        asyncio.create_task(periodic_task())
-
+        # Ping server
+        await connect(session, account['token'], account['proxyConfig'])
+        account['status'] = Fore.GREEN + 'Connected' + Style.RESET_ALL
+        
+        # 获取收益信息
+        earnings_res = await get_earnings(session, account['token'], account['proxyConfig'])
+        if earnings_res and 'data' in earnings_res:
+            account['pointsToday'] = earnings_res['data'].get('earnings', 0)
+            account['totalPoints'] = earnings_res['data'].get('epoch', 0)
+            account['lastUpdate'] = get_timestamp()
+            log_success(
+                index + 1,
+                f"Ping successful ({account['proxyConfig']['type']})" if account['proxyConfig'] else "Ping successful (Direct)",
+                account['pointsToday'],
+                account['totalPoints'],
+                account['username'],
+                account['email']
+            )
+        else:
+            logger.warn(f"账户 {index + 1} 收益信息获取失败。")
+    
     except Exception as e:
-        logger.error(f"处理账户 {index + 1} 时出错:", str(e))
+        account['status'] = Fore.RED + 'Error' + Style.RESET_ALL
+        account['lastUpdate'] = get_timestamp()
+        logger.error(f"账户 {index + 1} 出现错误:", str(e))
 
 async def main():
     """主函数"""
-    # 显示横幅
-    banner = """
-    =========================
-    === 欢迎使用 DepinedBot ===
-    =========================
-    """
-    logger.info(banner)
-    
-    # 延迟3秒
-    await delay(3)
-    
-    # 读取 tokens 和 proxies
-    tokens = await read_file("tokens.txt")
-    if not tokens:
-        logger.error('在 tokens.txt 中未找到任何令牌。')
-        return
-    
-    proxies = await read_file("proxy.txt")
-    if not proxies:
-        logger.warn('未配置代理，程序将不使用代理。')
-    
-    logger.info(f"开始处理所有账户: {len(tokens)} 个账户")
-    
-    # 创建 aiohttp ClientSession
-    timeout = aiohttp.ClientTimeout(total=60)
-    connector = aiohttp.TCPConnector(ssl=False)
-    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-        # 处理每个账户
-        tasks = []
-        for index, token in enumerate(tokens):
-            proxy = proxies[index % len(proxies)] if proxies else None
-            task = asyncio.create_task(process_account(session, token, proxy, index))
-            tasks.append(task)
-        
-        await asyncio.gather(*tasks)
+    display_banner()  # 显示横幅
 
-        # 保持程序运行，等待所有定时任务执行
-        await asyncio.Event().wait()
+    spinner = Halo(text='读取输入文件...', spinner='dots')
+    spinner.start()
+    tokens, proxies = await read_input_files()
+    spinner.succeed(f"加载了 {len(tokens)} 个令牌和 {len(proxies)} 个代理")
+
+    accounts = [
+        {
+            'token': token,
+            'proxyConfig': proxies[index % len(proxies)] if proxies else None,
+            'status': 'Initializing',
+            'username': None,
+            'email': None,
+            'pointsToday': 0,
+            'totalPoints': 0,
+            'lastUpdate': None
+        }
+        for index, token in enumerate(tokens)
+    ]
+
+    while True:
+        # 清屏并显示横幅
+        os.system('cls' if os.name == 'nt' else 'clear')
+        display_banner()
+        print(Fore.YELLOW + '加入我们 : https://t.me/ksqxszq\n')
+        print(Fore.CYAN + '=== Depined 多账户管理 ===\n')
+        print(create_stats_table(accounts))
+        print(Fore.CYAN + '\n=== 活动日志 ===')
+
+        async with aiohttp.ClientSession() as session:
+            tasks = [process_account(session, account, index) for index, account in enumerate(accounts)]
+            await asyncio.gather(*tasks)
+        
+        # 等待30秒后刷新
+        await delay(30)
 
 # =========================
 # 进程信号处理
@@ -384,6 +447,56 @@ def setup_signal_handlers():
             signal.signal(sig, lambda s, f: shutdown())
 
 # =========================
+# 文件读取与验证
+# =========================
+
+async def read_input_files():
+    """读取并验证输入文件"""
+    try:
+        tokens = await read_file("tokens.txt")
+        if not tokens:
+            logger.error('在 tokens.txt 中未找到任何令牌。')
+            sys.exit(1)
+        
+        proxies = []
+        try:
+            proxy_strings = await read_file("proxy.txt")
+            for proxy_str in proxy_strings:
+                try:
+                    proxy_config = parse_proxy_string(proxy_str)
+                    proxies.append(proxy_config)
+                except Exception as e:
+                    logger.warn(f"代理解析失败: {proxy_str} - {str(e)}")
+        except Exception as e:
+            logger.warn('未找到 proxy.txt 或读取代理时出错。程序将不使用代理。')
+        
+        return tokens, proxies
+    except Exception as e:
+        logger.error(f"读取输入文件时出错:", str(e))
+        sys.exit(1)
+
+def parse_proxy_string(proxy_string):
+    """解析代理字符串"""
+    try:
+        protocol, rest = proxy_string.strip().split("://", 1)
+        if '@' in rest:
+            credentials, host_port = rest.split('@', 1)
+            username, password = credentials.split(':', 1)
+            auth = {'username': username, 'password': password}
+        else:
+            host_port = rest
+            auth = None
+        host, port = host_port.split(':', 1)
+        return {
+            'type': protocol.lower(),
+            'host': host,
+            'port': int(port),
+            'auth': auth
+        }
+    except Exception as e:
+        raise ValueError(f"无效的代理格式: {proxy_string}") from e
+
+# =========================
 # 运行主程序
 # =========================
 
@@ -393,3 +506,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as e:
         logger.error("程序运行时出错:", str(e))
+        sys.exit(1)
