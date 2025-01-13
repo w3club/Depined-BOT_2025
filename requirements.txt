@@ -1,5 +1,7 @@
 aiohttp
-aiohttp-socks
-colorama
 fake-useragent
+colorama
+pyfiglet
+tabulate
+halo
 pytz
