@@ -27,7 +27,7 @@ DepinedBot 是一个基于 Node.js 和 Python 的自动化脚本，旨在帮助�
 1. 访问 [Depined 平台](https://app.depined.org/onboarding)
 2. 在注册过程中使用以下推荐码：
 ```
-PDhuXUdms9as
+OTBIpU3NBeWz
 ```
 
 **重要提示**：该推荐码有 5 人使用限制。如果无法使用，说明已经达到最大使用人数。
