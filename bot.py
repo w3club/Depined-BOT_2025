@@ -73,6 +73,7 @@ class CustomLogger:
                     formatted_value = f" {Fore.GREEN}{value}{Style.RESET_ALL}"
             formatted_message += formatted_value
 
+        # 使用 getattr 结合 level_upper 来获取对应的 logging 级别
         self.logger.log(getattr(logging, level_upper(level_cn), logging.INFO), formatted_message)
 
     def info(self, message, value=''):
@@ -171,85 +172,6 @@ def make_headers(token=None):
     if token:
         hdr['Authorization'] = f'Bearer {token}'
     return hdr
-
-async def register_user(session, email, password):
-    """注册用户"""
-    url = 'https://api.depined.org/api/user/register'
-    payload = {
-        'email': email,
-        'password': password
-    }
-    try:
-        async with session.post(url, json=payload, headers=make_headers()) as response:
-            if response.status == 200:
-                data = await response.json()
-                logger.success('用户注册成功:', data.get('message', ''))
-                return data
-            else:
-                error_data = await response.json()
-                logger.error('注册用户时出错:', error_data)
-                return None
-    except aiohttp.ClientError as e:
-        logger.error('注册用户时出错:', str(e))
-        return None
-
-async def login_user(session, email, password):
-    """用户登录"""
-    url = 'https://api.depined.org/api/user/login'
-    payload = {
-        'email': email,
-        'password': password
-    }
-    try:
-        async with session.post(url, json=payload, headers=make_headers()) as response:
-            if response.status == 200:
-                data = await response.json()
-                logger.success('用户登录成功:', data.get('message', ''))
-                return data
-            else:
-                error_data = await response.json()
-                logger.error('用户登录时出错:', error_data)
-                return None
-    except aiohttp.ClientError as e:
-        logger.error('用户登录时出错:', str(e))
-        return None
-
-async def create_user_profile(session, token, payload):
-    """创建用户资料"""
-    url = 'https://api.depined.org/api/user/profile-creation'
-    try:
-        async with session.post(url, json=payload, headers=make_headers(token)) as response:
-            if response.status == 200:
-                data = await response.json()
-                logger.success('用户资料创建成功:', data.get('message', ''))
-                return data
-            else:
-                error_data = await response.json()
-                logger.error('创建用户资料时出错:', error_data)
-                return None
-    except aiohttp.ClientError as e:
-        logger.error('创建用户资料时出错:', str(e))
-        return None
-
-async def confirm_user_reff(session, token, referral_code):
-    """确认用户推荐码"""
-    url = 'https://api.depined.org/api/access-code/referal'
-    payload = {
-        'referral_code': referral_code
-    }
-    try:
-        async with session.post(url, json=payload, headers=make_headers(token)) as response:
-            if response.status == 200:
-                data = await response.json()
-                logger.success('确认用户推荐码成功:', data.get('message', ''))
-                return data
-            else:
-                error_data = await response.json()
-                logger.error('确认用户推荐码时出错:', error_data)
-                return None
-    except aiohttp.ClientError as e:
-        logger.error('确认用户推荐码时出错:', str(e))
-        return None
 
 async def get_user_info(session, token, proxy=None):
     """获取用户信息"""
@@ -354,6 +276,9 @@ class DepinedBot:
     async def process_account(self, session, account, index):
         """处理单个账户，包括获取用户信息和设置定时任务"""
         try:
+            # 调试日志：打印当前账户的 proxyConfig
+            logger.debug(f"处理账户 {index + 1} 的 proxyConfig: {account['proxyConfig']}")
+
             # 获取用户信息
             proxy_url = account['proxyConfig']['url'] if account['proxyConfig'] else None
             user_data = await get_user_info(session, account['token'], proxy_url)
