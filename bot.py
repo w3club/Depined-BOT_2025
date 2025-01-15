@@ -1,5 +1,6 @@
 import asyncio
 import aiohttp
+import aiofiles
 from fake_useragent import UserAgent
 import logging
 import json
@@ -20,7 +21,7 @@ init(autoreset=True)
 # 日志记录模块
 # =========================
 
-class Logger:
+class CustomLogger:
     def __init__(self, timezone="Asia/Shanghai"):
         self.logger = logging.getLogger("DepinedBot")
         self.logger.setLevel(logging.DEBUG)
@@ -100,7 +101,7 @@ def level_upper(level_cn):
     }
     return mapping.get(level_cn, 'INFO')
 
-logger = Logger()
+logger = CustomLogger()
 
 # =========================
 # 辅助函数模块
@@ -119,11 +120,11 @@ async def delay(seconds):
 async def save_to_file(filename, data):
     """将数据保存到文件，每条数据占一行"""
     try:
-        with open(filename, 'a', encoding='utf-8') as f:
+        async with aiofiles.open(filename, 'a', encoding='utf-8') as f:
             if isinstance(data, (dict, list)):
-                f.write(json.dumps(data, ensure_ascii=False) + '\n')
+                await f.write(json.dumps(data, ensure_ascii=False) + '\n')
             else:
-                f.write(str(data) + '\n')
+                await f.write(str(data) + '\n')
         logger.info(f"数据已保存到 {filename}")
     except Exception as e:
         logger.error(f"保存数据到 {filename} 时失败:", str(e))
@@ -134,8 +135,8 @@ async def read_file(path_file):
         if not os.path.exists(path_file):
             logger.warn(f"文件 {path_file} 不存在。")
             return []
-        with open(path_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        async with aiofiles.open(path_file, 'r', encoding='utf-8') as f:
+            lines = await f.readlines()
         return [line.strip() for line in lines if line.strip()]
     except Exception as e:
         logger.error(f"读取文件 {path_file} 时出错:", str(e))
@@ -144,9 +145,8 @@ async def read_file(path_file):
 def new_agent(proxy=None):
     """根据代理类型创建代理字典"""
     if proxy:
-        if proxy.startswith('http://') or proxy.startswith('https://'):
-            return proxy
-        elif proxy.startswith('socks4://') or proxy.startswith('socks5://'):
+        if proxy.startswith('http://') or proxy.startswith('https://') or \
+           proxy.startswith('socks4://') or proxy.startswith('socks5://'):
             return proxy
         else:
             logger.warn(f"不支持的代理类型: {proxy}")
@@ -316,7 +316,6 @@ async def connect(session, token, proxy=None):
 class DepinedBot:
     def __init__(self):
         self.accounts = []
-        self.loop = asyncio.get_event_loop()
 
     def display_banner(self):
         """显示 ASCII 艺术横幅"""
@@ -356,7 +355,8 @@ class DepinedBot:
         """处理单个账户，包括获取用户信息和设置定时任务"""
         try:
             # 获取用户信息
-            user_data = await get_user_info(session, account['token'], account['proxyConfig'])
+            proxy_url = account['proxyConfig']['url'] if account['proxyConfig'] else None
+            user_data = await get_user_info(session, account['token'], proxy_url)
             if user_data and 'data' in user_data:
                 email = user_data['data'].get('email', '')
                 verified = user_data['data'].get('verified', False)
@@ -372,19 +372,23 @@ class DepinedBot:
                 })
             
             # Ping server
-            await connect(session, account['token'], account['proxyConfig'])
+            await connect(session, account['token'], proxy_url)
             account['status'] = Fore.GREEN + '已连接' + Style.RESET_ALL
             
             # 获取收益信息
-            earnings_res = await get_earnings(session, account['token'], account['proxyConfig'])
+            earnings_res = await get_earnings(session, account['token'], proxy_url)
             if earnings_res and 'data' in earnings_res:
                 account['pointsToday'] = earnings_res['data'].get('earnings', 0)
                 # 使用 user_data 中的 points_balance 作为总积分
-                account['totalPoints'] = user_data['data'].get('points_balance', 0)
+                if user_data and 'data' in user_data:
+                    account['totalPoints'] = user_data['data'].get('points_balance', 0)
+                else:
+                    account['totalPoints'] = 0  # 或者根据需求设置默认值
                 account['lastUpdate'] = get_timestamp(timezone="Asia/Shanghai")
+                proxy_type = account['proxyConfig']['type'] if account['proxyConfig'] else "直接连接"
                 self.log_success(
                     index + 1,
-                    f"Ping 成功 ({account['proxyConfig']['type']})" if account['proxyConfig'] else "Ping 成功 (直接连接)",
+                    f"Ping 成功 ({proxy_type})",
                     account['pointsToday'],
                     account['totalPoints'],
                     account['username'],
@@ -421,21 +425,23 @@ class DepinedBot:
             for index, token in enumerate(tokens)
         ]
 
-        while True:
-            # 清屏并显示横幅
-            os.system('cls' if os.name == 'nt' else 'clear')
-            self.display_banner()
-            print(Fore.YELLOW + '加入我们 : https://t.me/ksqxszq\n')
-            print(Fore.CYAN + '=== Depined 多账户管理 ===\n')
-            print(self.create_stats_table())
-            print(Fore.CYAN + '\n=== 活动日志 ===')
+        # 设置 aiohttp 的超时
+        timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while True:
+                # 清屏并显示横幅
+                os.system('cls' if os.name == 'nt' else 'clear')
+                self.display_banner()
+                print(Fore.YELLOW + '加入我们 : https://t.me/ksqxszq\n')
+                print(Fore.CYAN + '=== Depined 多账户管理 ===\n')
+                print(self.create_stats_table())
+                print(Fore.CYAN + '\n=== 活动日志 ===')
 
-            async with aiohttp.ClientSession() as session:
                 tasks = [self.process_account(session, account, index) for index, account in enumerate(self.accounts)]
                 await asyncio.gather(*tasks)
             
-            # 等待30秒后刷新
-            await delay(30)
+                # 等待30秒后刷新
+                await delay(30)
 
     def shutdown(self):
         """优雅地关闭程序"""
@@ -447,15 +453,20 @@ class DepinedBot:
         )
         print(exit_message)
         # 取消所有挂起的任务
-        tasks = asyncio.all_tasks(loop=self.loop)
-        for task in tasks:
-            task.cancel()
-        # 等待任务取消
         try:
-            self.loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-        except Exception:
-            pass
-        self.loop.stop()
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 如果没有正在运行的事件循环
+            loop = None
+        if loop and not loop.is_closed():
+            tasks = asyncio.all_tasks(loop=loop)
+            for task in tasks:
+                task.cancel()
+            # 等待任务取消
+            try:
+                loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+            except Exception:
+                pass
         sys.exit(0)
 
     def setup_signal_handlers(self):
@@ -499,12 +510,11 @@ def parse_proxy_string(proxy_string):
         if '@' in rest:
             credentials, host_port = rest.split('@', 1)
             username, password = credentials.split(':', 1)
-            auth = {'username': username, 'password': password}
             proxy_url = f"{protocol}://{username}:{password}@{host_port}"
         else:
             host_port = rest
             proxy_url = f"{protocol}://{host_port}"
-        return proxy_url
+        return {'type': protocol, 'url': proxy_url}
     except Exception as e:
         raise ValueError(f"无效的代理格式: {proxy_string}") from e
 
