@@ -221,7 +221,7 @@ const readInputFiles = async (useProxy) => {
     }
 
     let proxies = [];
-    if (useProxy) { // 根据用户选择决定是否读取代理文件
+    if (useProxy) { 
       try {
         const proxyData = await fs.readFile(PROXY_FILE, 'utf8');
         proxies = proxyData
@@ -240,7 +240,7 @@ const readInputFiles = async (useProxy) => {
   }
 };
 
-// Function to wait for user to press any key
+
 const waitForAnyKey = async (message) => {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -283,7 +283,7 @@ const main = async () => {
 
   const accounts = tokens.map((token, index) => ({
     token,
-    proxyConfig: useProxy ? (proxies[index % proxies.length] || null) : null, // 根据用户选择决定是否分配代理
+    proxyConfig: useProxy ? (proxies[index % proxies.length] || null) : null, 
     status: '初始化中',
     username: null,
     email: null,
@@ -333,11 +333,10 @@ const main = async () => {
         console.log(chalk.red(`[${getTimestamp()}] 账户 ${i + 1}: 错误 - ${error.message}`));
       }
 
-      // 防止速率限制，账户之间添加小延迟
+      
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 
-    // 等待 30 秒后进行下一次更新
     await new Promise((resolve) => setTimeout(resolve, 30000));
   }
 };
