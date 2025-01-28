@@ -16,9 +16,7 @@ DepinedBot 是一个基于 Node.js 和 Python 的自动化脚本，旨在帮助�
 - 美观的控制台输出，支持多种颜色标记日志级别
 - 自动定时更新数据
 
-## 安装要求
 
-- **Python 版本**：Python 3.7 或更高版本
 
 ## 注册
 
@@ -58,11 +56,11 @@ cd Depined-BOT
 ```
 安装依赖
 ```bash
-pip install -r requirements.txt
+npm install
 ```
 运行脚本：
 ```bash
-python3 bot.py
+node bot.js
 ```
 退出程序
 可以使用以下方式安全退出脚本：
