@@ -7,29 +7,27 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import figlet from 'figlet';
 
-// 配置文件路径
-const TOKEN_FILE = 'tokens.txt'; // 存储账户 Token 的文件
-const PROXY_FILE = 'proxy.txt'; // 存储代理信息的文件
 
-// API 基础地址
+const TOKEN_FILE = 'tokens.txt'; 
+const PROXY_FILE = 'proxy.txt'; 
+
 const BASE_URL = 'https://api.depined.org/api';
 
-// 显示欢迎横幅
+
 const displayBanner = () => {
   console.log(chalk.green(figlet.textSync('空投助手', { horizontalLayout: 'full' })));
   console.log(chalk.yellow('欢迎使用空投助手 - 多账户管理工具\n'));
 };
 
-// 获取当前北京时间
 const getTimestamp = () => {
   const now = new Date();
-  const beijingOffset = 8 * 60; // 北京时间为 UTC+8
-  const localOffset = now.getTimezoneOffset(); // 本地时间与 UTC 的偏移量（分钟）
+  const beijingOffset = 8 * 60; 
+  const localOffset = now.getTimezoneOffset();
   const beijingTime = new Date(now.getTime() + (beijingOffset + localOffset) * 60 * 1000);
   return beijingTime.toLocaleTimeString('zh-CN', { hour12: false });
 };
 
-// 创建统计表格
+
 const createStatsTable = (accounts) => {
   const table = new Table({
     head: ['账户', '用户名', '邮箱', '代理', '状态', '今日积分', '总积分', '最后更新'],
@@ -57,7 +55,7 @@ const createStatsTable = (accounts) => {
   return table;
 };
 
-// 解析代理字符串
+
 const parseProxyString = (proxyString) => {
   try {
     const [protocol, rest] = proxyString.trim().split('://');
@@ -91,7 +89,7 @@ const parseProxyString = (proxyString) => {
   }
 };
 
-// 创建代理 Agent
+
 const createProxyAgent = (proxyConfig) => {
   const { type, host, port, auth } = proxyConfig;
   const proxyUrl = auth ? `${type}://${auth.username}:${auth.password}@${host}:${port}` : `${type}://${host}:${port}`;
@@ -105,7 +103,7 @@ const createProxyAgent = (proxyConfig) => {
   }
 };
 
-// 获取用户统计数据
+
 const getStats = async (token, proxyConfig = null) => {
   const headers = {
     Accept: 'application/json',
@@ -142,7 +140,7 @@ const getStats = async (token, proxyConfig = null) => {
   }
 };
 
-// 获取用户信息
+
 const getUserProfile = async (token, proxyConfig = null) => {
   const headers = {
     Accept: 'application/json',
@@ -228,7 +226,7 @@ const readInputFiles = async () => {
       throw new Error('tokens.txt 文件中未找到有效的 Token');
     }
 
-    // 读取代理文件
+ 
     let proxies = [];
     try {
       const proxyData = await fs.readFile(PROXY_FILE, 'utf8');
@@ -247,7 +245,7 @@ const readInputFiles = async () => {
   }
 };
 
-// 主函数
+
 const main = async () => {
   displayBanner();
 
@@ -277,18 +275,18 @@ const main = async () => {
       const account = accounts[i];
 
       try {
-        // 获取用户信息
+       
         if (!account.username || !account.email) {
           const profile = await getUserProfile(account.token, account.proxyConfig);
           account.username = profile.username;
           account.email = profile.email;
         }
 
-        // 发送心跳请求
+    
         await ping(account.token, account.proxyConfig);
         account.status = chalk.green('已连接');
 
-        // 获取统计数据
+       
         const stats = await getStats(account.token, account.proxyConfig);
         account.pointsToday = stats.pointsToday;
         account.totalPoints = stats.totalPoints;
@@ -307,16 +305,16 @@ const main = async () => {
         console.log(chalk.red(`[${getTimestamp()}] 账户 ${i + 1}: 错误 - ${error.message}`));
       }
 
-      // 延迟 1 秒，避免请求过快
+   
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 
-    // 每 30 秒更新一次
+ 
     await new Promise((resolve) => setTimeout(resolve, 30000));
   }
 };
 
-// 启动程序
+
 (async () => {
   try {
     await main();
