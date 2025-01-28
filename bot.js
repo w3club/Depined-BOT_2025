@@ -6,13 +6,12 @@ import Table from 'cli-table3';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import figlet from 'figlet';
-
+import readline from 'readline'; // 添加 readline 库用于用户交互
 
 const TOKEN_FILE = 'tokens.txt'; 
 const PROXY_FILE = 'proxy.txt'; 
 
 const BASE_URL = 'https://api.depined.org/api';
-
 
 const displayBanner = () => {
   console.log(chalk.green(figlet.textSync('空投助手', { horizontalLayout: 'full' })));
@@ -26,7 +25,6 @@ const getTimestamp = () => {
   const beijingTime = new Date(now.getTime() + (beijingOffset + localOffset) * 60 * 1000);
   return beijingTime.toLocaleTimeString('zh-CN', { hour12: false });
 };
-
 
 const createStatsTable = (accounts) => {
   const table = new Table({
@@ -54,7 +52,6 @@ const createStatsTable = (accounts) => {
 
   return table;
 };
-
 
 const parseProxyString = (proxyString) => {
   try {
@@ -89,7 +86,6 @@ const parseProxyString = (proxyString) => {
   }
 };
 
-
 const createProxyAgent = (proxyConfig) => {
   const { type, host, port, auth } = proxyConfig;
   const proxyUrl = auth ? `${type}://${auth.username}:${auth.password}@${host}:${port}` : `${type}://${host}:${port}`;
@@ -102,7 +98,6 @@ const createProxyAgent = (proxyConfig) => {
     throw new Error(`不支持的代理类型: ${type}`);
   }
 };
-
 
 const getStats = async (token, proxyConfig = null) => {
   const headers = {
@@ -139,7 +134,6 @@ const getStats = async (token, proxyConfig = null) => {
     throw error;
   }
 };
-
 
 const getUserProfile = async (token, proxyConfig = null) => {
   const headers = {
@@ -213,7 +207,7 @@ const ping = async (token, proxyConfig = null) => {
 };
 
 // 读取输入文件（Token 和代理）
-const readInputFiles = async () => {
+const readInputFiles = async (useProxy) => {
   try {
     // 读取 Token 文件
     const tokenData = await fs.readFile(TOKEN_FILE, 'utf8');
@@ -226,17 +220,18 @@ const readInputFiles = async () => {
       throw new Error('tokens.txt 文件中未找到有效的 Token');
     }
 
- 
     let proxies = [];
-    try {
-      const proxyData = await fs.readFile(PROXY_FILE, 'utf8');
-      proxies = proxyData
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .map((proxyString) => parseProxyString(proxyString));
-    } catch (error) {
-      console.log(chalk.yellow('未找到 proxy.txt 文件，程序将直接连接 API'));
+    if (useProxy) { // 根据用户选择决定是否读取代理文件
+      try {
+        const proxyData = await fs.readFile(PROXY_FILE, 'utf8');
+        proxies = proxyData
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .map((proxyString) => parseProxyString(proxyString));
+      } catch (error) {
+        console.log(chalk.yellow('未找到 proxy.txt 文件或读取失败，程序将直接连接 API'));
+      }
     }
 
     return { tokens, proxies };
@@ -245,17 +240,50 @@ const readInputFiles = async () => {
   }
 };
 
+// Function to wait for user to press any key
+const waitForAnyKey = async (message) => {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
 
+  console.log(chalk.yellow(message));
+  return new Promise((resolve) => {
+    rl.question('按任意键继续...', () => {
+      rl.close();
+      resolve();
+    });
+  });
+};
+
+// 主函数
 const main = async () => {
   displayBanner();
 
-  const spinner = ora('正在加载配置文件...').start();
-  const { tokens, proxies } = await readInputFiles();
-  spinner.succeed(`加载完成: ${tokens.length} 个账户, ${proxies.length} 个代理`);
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  const useProxy = await new Promise((resolve) => {
+    rl.question('是否使用代理？ (y/n): ', (answer) => {
+      resolve(answer.toLowerCase() === 'y');
+    });
+  });
+
+  if (useProxy) {
+    await waitForAnyKey('\n注意: 使用代理可能会导致 Cloudflare 问题。\n如果遇到错误，考虑切换到直连模式（不使用代理）。\n');
+  }
+
+  rl.close();
+
+  const spinner = ora('正在读取输入文件...').start();
+  const { tokens, proxies } = await readInputFiles(useProxy);
+  spinner.succeed(`加载完成: ${tokens.length} 个账户${useProxy ? `, ${proxies.length} 个代理` : ''}`);
 
   const accounts = tokens.map((token, index) => ({
     token,
-    proxyConfig: proxies[index % proxies.length] || null,
+    proxyConfig: useProxy ? (proxies[index % proxies.length] || null) : null, // 根据用户选择决定是否分配代理
     status: '初始化中',
     username: null,
     email: null,
@@ -275,18 +303,18 @@ const main = async () => {
       const account = accounts[i];
 
       try {
-       
+        // 获取用户信息（用户名和邮箱）
         if (!account.username || !account.email) {
           const profile = await getUserProfile(account.token, account.proxyConfig);
           account.username = profile.username;
           account.email = profile.email;
         }
 
-    
+        // 发送心跳请求
         await ping(account.token, account.proxyConfig);
         account.status = chalk.green('已连接');
 
-       
+        // 获取积分数据
         const stats = await getStats(account.token, account.proxyConfig);
         account.pointsToday = stats.pointsToday;
         account.totalPoints = stats.totalPoints;
@@ -305,16 +333,16 @@ const main = async () => {
         console.log(chalk.red(`[${getTimestamp()}] 账户 ${i + 1}: 错误 - ${error.message}`));
       }
 
-   
+      // 防止速率限制，账户之间添加小延迟
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 
- 
+    // 等待 30 秒后进行下一次更新
     await new Promise((resolve) => setTimeout(resolve, 30000));
   }
 };
 
-
+// 启动程序
 (async () => {
   try {
     await main();
