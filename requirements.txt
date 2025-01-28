@@ -1,7 +1,19 @@
-aiohttp
-fake-useragent
-colorama
-pyfiglet
-tabulate
-halo
-pytz
+{
+  "name": "Depined-BOT",
+  "version": "1.0.0",
+  "description": "多账户管理工具，用于管理多个账户、获取用户资料和统计数据，并通过代理保持连接。",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "cli-table3": "^0.6.2",
+    "cloudscraper": "^2.2.0",
+    "figlet": "^1.5.2",
+    "https-proxy-agent": "^7.0.0",
+    "ora": "^6.1.2",
+    "socks-proxy-agent": "^7.0.0"
+  }
+}
+
