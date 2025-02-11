@@ -265,11 +265,7 @@ const main = async () => {
     output: process.stdout
   });
 
-  const useProxy = await new Promise((resolve) => {
-    rl.question('是否使用代理？ (y/n): ', (answer) => {
-      resolve(answer.toLowerCase() === 'y');
-    });
-  });
+  const useProxy = false;
 
   if (useProxy) {
     await waitForAnyKey('\n注意: 使用代理可能会导致 Cloudflare 问题。\n如果遇到错误，考虑切换到直连模式（不使用代理）。\n');
